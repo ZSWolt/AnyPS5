@@ -65,6 +65,22 @@ alignas(256) auto OrderedCode = std::to_array<std::uint32_t>({
     0xbf810000,
 });
 
+constexpr std::uint32_t OrderedGroups = 64;
+constexpr std::uint32_t OrderedGroupLanes = 32;
+constexpr std::uint32_t OrderedGroupPasses = 8;
+alignas(256) std::array<std::uint32_t, OrderedGroups * OrderedGroupLanes> GroupOutput{};
+
+alignas(256) auto OrderedGroupCode = std::to_array<std::uint32_t>({
+    0x7e0a02ff, UntouchedOrdered,
+    0x8f058704,
+    0xbefc03ff, 0x0000ffff,
+    0x7e0202ff, 0x00000001,
+    OrderedAdd, 0x05000001,
+    0xbf8cc07f,
+    0xe0702000, 0x05000500,
+    0xbf810000,
+});
+
 struct OrderedRun {
     std::uint32_t m0;
     std::uint32_t firstLaneEighths;
@@ -128,6 +144,37 @@ void Run(AgcDriver::VulkanDevice& device, const Workgroup& workgroup, std::span<
     const auto result = ShaderRecompiler::Recompile(request);
     device.Dispatch(result, 1, 1, 1, {}, reinterpret_cast<std::uintptr_t>(code.data()));
     device.WaitIdle();
+}
+
+void RunGroups(AgcDriver::VulkanDevice& device, std::span<const std::uint32_t> code) {
+    GroupOutput.fill(0xdeadbeefu);
+    std::vector<std::uint32_t> userData(4, 0u);
+    const auto output = BufferDescriptor(GroupOutput.data(), static_cast<std::uint32_t>(GroupOutput.size()));
+    std::copy(output.begin(), output.end(), userData.begin());
+    const std::array<ShaderRecompiler::MemoryRegion, 1> memory{{{reinterpret_cast<std::uintptr_t>(code.data()), std::as_bytes(code)}}};
+    const ShaderRecompiler::ShaderComputeStageInfo compute{{OrderedGroupLanes, 1, 1}, 0, {true, false, false}, false, 1};
+    ShaderRecompiler::RecompileRequest request{
+        {ShaderStage::Compute, reinterpret_cast<std::uintptr_t>(code.data()), code, 0, {}},
+        {32, 0, userData, compute, std::nullopt, std::nullopt, memory},
+        device.Target(),
+        {0, 0, 0, 128}
+    };
+    request.useCache = false;
+    const auto result = ShaderRecompiler::Recompile(request);
+    device.Dispatch(result, OrderedGroups, 1, 1, {}, reinterpret_cast<std::uintptr_t>(code.data()));
+    device.WaitIdle();
+}
+
+void CheckOrderedGroups(std::uint32_t pass, const std::array<std::uint32_t, Counters>& counters) {
+    const auto start = Starts[0] + pass * OrderedGroups;
+    const auto what = std::to_string(OrderedGroups) + " single-wave groups, dispatch " + std::to_string(pass + 1u) + ", ds_ordered_count";
+    for (std::uint32_t group = 0; group < OrderedGroups; ++group) {
+        for (std::uint32_t lane = 0; lane < OrderedGroupLanes; ++lane) {
+            const auto actual = GroupOutput[group * OrderedGroupLanes + lane];
+            Require(actual == start + group, what + ": group " + std::to_string(group) + " lane " + std::to_string(lane) + " returned " + std::to_string(actual) + ", expected " + std::to_string(start + group) + " (the counter in launch order)");
+        }
+    }
+    Require(counters[0] == start + OrderedGroups, what + ": GDS counter 0 is " + std::to_string(counters[0]) + ", expected " + std::to_string(start + OrderedGroups));
 }
 
 void CheckWaves(const Workgroup& workgroup, std::uint32_t result, std::uint32_t start, bool append, bool masked) {
@@ -259,6 +306,11 @@ int main() {
                 Run(*device, workgroup, OrderedCode);
                 CheckOrderedSwap(workgroup, run.m0, firstLane, ReadCounters(queue));
             }
+        }
+        SetCounters(queue);
+        for (std::uint32_t pass = 0; pass < OrderedGroupPasses; ++pass) {
+            RunGroups(*device, OrderedGroupCode);
+            CheckOrderedGroups(pass, ReadCounters(queue));
         }
         std::puts("gds append consume tests passed");
         return 0;
