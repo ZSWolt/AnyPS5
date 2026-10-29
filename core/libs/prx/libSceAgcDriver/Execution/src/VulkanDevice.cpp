@@ -5281,11 +5281,10 @@ void VulkanDevice::recordDispatch(RecordedDispatch& record) {
     if (record.pushStages != 0) {
         context.Resolved(&Graphics::DeviceFunctions::cmdPushConstants, "vkCmdPushConstants")(commands, record.objects->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, Graphics::ComputePushConstantBytes, record.pushBytes->data());
     }
-    const bool bindsGds = std::ranges::any_of(record.shader->program->bindings, [](const auto& binding) { return binding.role == ShaderRecompiler::DescriptorRole::Gds; });
-    const auto orderedTurn = bindsGds ? resources.zeroGuestBytes(Pm4::GdsAddress() + Pm4::GdsOrderedTurnOffset, sizeof(std::uint32_t)) : std::nullopt;
+    const auto orderedTurn = record.shader->program->orderedAppend ? resources.guestFillTarget(Pm4::GdsAddress() + Pm4::GdsOrderedTurnOffset, sizeof(std::uint32_t)) : std::nullopt;
     const auto resetOrderedTurn = [&] {
         if (!orderedTurn.has_value()) return;
-        Graphics::RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        Graphics::RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
         context.Resolved(&Graphics::DeviceFunctions::cmdFillBuffer, "vkCmdFillBuffer")(commands, orderedTurn->buffer, orderedTurn->offset, orderedTurn->range, 0u);
         Graphics::RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
     };

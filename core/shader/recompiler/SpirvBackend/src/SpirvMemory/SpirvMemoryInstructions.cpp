@@ -1310,6 +1310,7 @@ std::uint32_t OrderedFlags(const IrValue& inst) {
 }
 
 constexpr std::uint32_t OrderedTurnWaitLimit = 1u << 20u;
+constexpr std::uint32_t OrderedTurnAbandoned = 0xffffffffu;
 
 struct OrderedTurn {
     std::uint32_t pointer;
@@ -1338,15 +1339,20 @@ std::uint32_t EmitOrderedTurn(SpirvEmitterState& state, const OrderedTurn& turn,
     state.module.AddFunction(spv::OpAtomicLoad, TypeU32(state), loaded, turn.pointer, ConstantU32(state, spv::ScopeDevice), ConstantU32(state, spv::MemorySemanticsAcquireMask | spv::MemorySemanticsUniformMemoryMask));
     state.module.AddFunction(spv::OpIAdd, TypeU32(state), triesNext, tries, ConstantU32(state, 1u));
     const auto ready = AndCondition(state, actor, Binary(state, spv::OpIEqual, TypeBool(state), loaded, turn.launch));
+    const auto abandoned = Binary(state, spv::OpIEqual, TypeBool(state), loaded, ConstantU32(state, OrderedTurnAbandoned));
     const auto exhausted = AndCondition(state, actor, Binary(state, spv::OpUGreaterThanEqual, TypeBool(state), triesNext, ConstantU32(state, OrderedTurnWaitLimit)));
-    const auto finish = Binary(state, spv::OpLogicalOr, TypeBool(state), ready, exhausted);
+    const auto unordered = AndCondition(state, Unary(state, spv::OpLogicalNot, TypeBool(state), ready), Binary(state, spv::OpLogicalOr, TypeBool(state), exhausted, AndCondition(state, actor, abandoned)));
+    const auto finish = Binary(state, spv::OpLogicalOr, TypeBool(state), ready, unordered);
     const auto value = EmitValueOrZeroIfCondition(state, AndCondition(state, finish, condition), atomic);
-    EmitIfCondition(state, AndCondition(state, exhausted, Unary(state, spv::OpLogicalNot, TypeBool(state), ready)), [&] {
+    EmitIfCondition(state, unordered, [&] {
         const auto counted = state.module.AllocateId();
         state.module.AddFunction(spv::OpAtomicIAdd, TypeU32(state), counted, turn.timeouts, ConstantU32(state, spv::ScopeDevice), ConstantU32(state, spv::MemorySemanticsMaskNone), ConstantU32(state, 1u));
+        EmitIfCondition(state, Unary(state, spv::OpLogicalNot, TypeBool(state), abandoned), [&] {
+            state.module.AddFunction(spv::OpAtomicStore, turn.pointer, ConstantU32(state, spv::ScopeDevice), ConstantU32(state, spv::MemorySemanticsMaskNone), ConstantU32(state, OrderedTurnAbandoned));
+        });
     });
     if (turn.release) {
-        EmitIfCondition(state, finish, [&] {
+        EmitIfCondition(state, ready, [&] {
             const auto previous = state.module.AllocateId();
             state.module.AddFunction(spv::OpAtomicCompareExchange, TypeU32(state), previous, turn.pointer, ConstantU32(state, spv::ScopeDevice), ConstantU32(state, spv::MemorySemanticsReleaseMask | spv::MemorySemanticsUniformMemoryMask), ConstantU32(state, spv::MemorySemanticsMaskNone), turn.wrapped, turn.launch);
         });

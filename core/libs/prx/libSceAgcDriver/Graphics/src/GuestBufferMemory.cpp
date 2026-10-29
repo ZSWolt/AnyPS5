@@ -5954,10 +5954,12 @@ VkDescriptorBufferInfo GuestBufferMemory::Descriptor(std::uint64_t address, std:
     return {handle, offset - adjustment, range};
 }
 
-std::span<std::byte> GuestBufferMemory::CpuCopy(std::uint64_t address, std::size_t bytes) const {
+std::optional<VkDescriptorBufferInfo> GuestBufferMemory::FillTarget(std::uint64_t address, std::size_t bytes) const {
     const auto* found = owner(address, address + bytes);
-    if (found == nullptr || found->buffer == nullptr || found->gpuCopy || found->deviceLocal || found->direct != nullptr || found->mirror != nullptr) return {};
-    return found->buffer->Bytes().subspan(static_cast<std::size_t>(address - found->begin), bytes);
+    if (found == nullptr || found->mirror != nullptr || (found->direct == nullptr && !found->gpuCopy)) return std::nullopt;
+    std::uint32_t adjustment = 0;
+    const auto info = Descriptor(address, bytes, adjustment);
+    return VkDescriptorBufferInfo{info.buffer, info.offset + adjustment, bytes};
 }
 
 std::uint64_t GuestBufferMemory::ViewBytes(std::uint64_t bytes, std::uint32_t adjustment) {

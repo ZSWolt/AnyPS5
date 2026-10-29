@@ -4596,16 +4596,6 @@ VkBuffer ShaderResources::shaderDataBuffer(const CompiledShader& shader) const {
     return allocation.has_value() ? allocations[*allocation].buffer->Handle() : VK_NULL_HANDLE;
 }
 
-std::optional<VkDescriptorBufferInfo> ShaderResources::zeroGuestBytes(std::uint64_t address, std::size_t bytes) {
-    if (const auto copy = guestMemory.CpuCopy(address, bytes); !copy.empty()) {
-        std::memset(copy.data(), 0, copy.size());
-        return std::nullopt;
-    }
-    std::uint32_t adjustment = 0;
-    const auto info = guestMemory.Descriptor(address, bytes, adjustment);
-    return VkDescriptorBufferInfo{info.buffer, info.offset + adjustment, bytes};
-}
-
 void ShaderResources::forgetShaderDataWords(const CompiledShader& shader) {
     if (const auto allocation = shaderDataAllocation(shader)) {
         allocations[*allocation].dataWords.clear();
