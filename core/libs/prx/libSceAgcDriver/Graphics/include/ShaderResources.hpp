@@ -352,6 +352,7 @@ private:
     bool refreshData(VkCommandBuffer commands, const CompiledShader& shader, Recorder* recorder);
     std::optional<std::size_t> shaderDataAllocation(const CompiledShader& shader) const;
     VkBuffer shaderDataBuffer(const CompiledShader& shader) const;
+    std::optional<VkDescriptorBufferInfo> zeroGuestBytes(std::uint64_t address, std::size_t bytes);
     void forgetShaderDataWords(const CompiledShader& shader);
     struct DescribedRange {
         const char* kind;
